@@ -5,7 +5,13 @@ import socket
 import time
 import cv2
 import numpy as np
-BufferSize = 40960
+import sounddevice as sd
+
+BufferSize = 409600
+fs = 44200 # Sampling rate (Sampling Rate Must be same across Client And Server)
+sd.default.samplerate = fs # Setting Default Sampling Rate
+
+duration = 5 # sec
 
 
 class SocketClient:
@@ -14,6 +20,9 @@ class SocketClient:
         self.__isrun = False
         self.__index = -1
         self.__usermsg={}
+
+        self.fs = fs
+        self.duration = duration   #for voice sending
 
     def close(self):
         msg = {
@@ -67,6 +76,29 @@ class SocketClient:
             }}  # 构造返回字符串
         self.__socket.send(bytes(json.dumps(msg), encoding="utf-8"))
         print("发送成功")
+
+    def send_voice(self,address):
+        if not self.__isrun: return
+        print("<-- Recording Voice -->")
+        myrecording = sd.rec(int(duration * fs), samplerate=fs, blocking=True, channels=1)
+        sd.wait()
+        sd.play(myrecording,fs)
+        Voice = myrecording.tostring()
+        msg = {
+            "code": 200,
+            "sender": self.__index,
+            "receiver": address,
+            "action": "voice",
+            "time": time.strftime("%Y/%m/%d %H:%M:%S", time.localtime()),
+            "data": {
+            }}  # 构造返回字符串
+        self.__socket.send(bytes(json.dumps(msg), encoding="utf-8"))
+        time.sleep(5)
+        self.__socket.sendall(Voice)
+        time.sleep(30)
+        self.__socket.send(bytes("-1", encoding="utf-8"))
+        print("语音发送成功")
+
 
     def send_file(self,address,file_path,mode):
         if not self.__isrun: return
@@ -126,6 +158,25 @@ class SocketClient:
         try:
             while self.__isrun:
                 data = json.loads(str(self.__socket.recv(BufferSize), encoding="utf-8"))
+                if data["action"] == "rec_voice":  #语音传输
+                    print(f"接收到{data['sender']}发送来的语音")
+                    time.sleep(2)
+                    print("<-- Received Voice -->")
+                    msg = self.__socket.recv(int(self.fs) * int(self.duration) * 4)
+                    total_data = b''
+                    # print(t_data)
+                    total_data += msg
+                    # 如果没有数据了，读出来的data长度为0，len(data)==0
+                    while msg != bytes("-1", encoding="utf-8"):
+                        msg = self.__socket.recv(int(self.fs) * int(self.duration) * 4)
+                        # print(t_data)
+                        if (msg != bytes("-1", encoding="utf-8")):
+                            total_data += msg
+                    voice = np.frombuffer(total_data, dtype=np.float32)
+                    print("<-- Playing Voice -->")
+                    sd.play(voice,self.fs)
+                    continue
+
                 if data["action"] == "rec_file":
                     print(f"接收到{data['sender']}发送来的文件")
                     total_data = b''
@@ -194,6 +245,9 @@ class SocketClient:
             pwd = str(input("请输入密码: "))
             self.__usermsg[user_id] = pwd
             self.register()
+            data_login = json.loads(str(self.__socket.recv(BufferSize), encoding="utf-8"))
+            time.sleep(1)
+            #
         elif get== "Login":
             flag=True #True代表没有成功登录的状态
             while(flag==True):
@@ -242,6 +296,10 @@ if __name__=="__main__":
         if "Sen_file" in get:
             data=get.split("/")
             client.send_file(data[1],data[2],mode=data[3])  #告诉文件格式
+
+        if "Voice" in get:
+            data=get.split("/")
+            client.send_voice(data[1])
 
     print("程序已结束")
 

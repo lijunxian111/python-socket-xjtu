@@ -9,8 +9,13 @@ import csv
 import pandas as pd
 import logging
 
-BufferSize = 40960 # 最大缓存4KB
+BufferSize = 409600 # 最大缓存4KB
 BufferEncoding = "utf-8"  # 缓存编码
+
+fs = 44200 # Sampling rate (Sampling Rate Must be same across Client And Service
+# Setting Default Sampling Rate
+
+duration = 5 # sec
 FileHeader = '''
 Socket Log
 StartTime:{}
@@ -35,7 +40,7 @@ class Log:
     def _writer(self, message):
         self.__lock.acquire()
         self.__counter += 1
-        stream = open(self.__path, "a+",encoding='utf-8') #这里改一句就可以输出正确的log
+        stream = open(self.__path, "a+",encoding='gbk') #这里改一句就可以输出正确的log
         stream.write(message + "\n")
         stream.close()
         self.__lock.release()
@@ -86,6 +91,10 @@ class SocketServer:
             self.loginfo(msg)
         if action == "file_sending":
             msg = "收到{}发往{}的文件".format(data["sender"], data["receiver"])
+            self.loginfo(msg)
+
+        if action == "voice":
+            msg = "收到{}发往{}的语音".format(data["sender"], data["receiver"])
             self.loginfo(msg)
 
         if action == "close":
@@ -142,6 +151,34 @@ class SocketServer:
 
             self.loginfo(str(e))
 
+    def _forward_voice(self,data:dict,voice):
+        try:
+            goal = data["receiver"]
+            # 判断是否为服务器消息
+            if goal == "host":
+                return
+
+            else:
+                for i in self.__connects:
+                    if goal in i:
+                        # 找到目标
+                        receiver: socket.socket = i[1]
+                        # 转发消息
+                        msg = self.createmsg(data['sender'], data['receiver'], 'rec_voice',status="success")
+                        receiver.send(bytes(msg, encoding=BufferEncoding)) #注意此处直接发ms
+                        print(f"向{data['receiver']}发送语音接收报头")
+                        time.sleep(15)
+                        receiver.sendall(voice)
+                        time.sleep(30)
+                        receiver.send(bytes("-1", encoding="utf-8"))
+                        return
+                # 未检测到
+                self.loginfo("目标未上线")
+
+
+        except Exception as e:
+            self.loginfo(str(e))
+
     def _forward_file(self,data:dict, file_path):
         try:
             goal = data["receiver"]
@@ -178,6 +215,19 @@ class SocketServer:
 
         if action == "msg":
             self._forward(data)
+
+            return 0
+
+        if action == "voice":
+            total_data=b''
+            voice_data = receiver.recv(int(fs) * int(duration) * 4)
+            total_data+=voice_data
+            while voice_data!=bytes("-1",encoding="utf-8"):
+                voice_data = receiver.recv(int(fs) * int(duration) * 4)
+                if(voice_data!=bytes("-1",encoding="utf-8")):
+                     total_data += voice_data
+            
+            self._forward_voice(data,total_data)
             return 0
 
         if action == "file_sending":
@@ -185,7 +235,6 @@ class SocketServer:
             num = 0
             print("111")
             t_data = receiver.recv(262144*4)
-            print(t_data)
             total_data += t_data
             num = len(t_data)
             # 如果没有数据了，读出来的data长度为0，len(data)==0
@@ -194,7 +243,6 @@ class SocketServer:
                 num += len(t_data)
                 if(t_data!=bytes("-1",encoding="utf-8")):
                     total_data += t_data
-                print(total_data)
             file_path=f"tmp_files/{num}.{data['data']['mode']}"
             with open(file_path, "wb") as f:
                 f.write(total_data)
@@ -269,7 +317,8 @@ class SocketServer:
     def _getmessage(self, index, receiver: socket.socket, address):
         try:
             while self.__isrun:
-                data = json.loads(str(receiver.recv(BufferSize), encoding=BufferEncoding))  # 4KB缓存
+                mcs=str(receiver.recv(BufferSize), encoding='utf8')
+                data = json.loads(mcs)  # 4KB缓存
 
                 ###LOG - Start 服务器Log记录
                 #self._logobj(data)
